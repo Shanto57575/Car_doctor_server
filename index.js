@@ -1,17 +1,15 @@
 const express = require('express');
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 const cors = require('cors');
+const jwt = require('jsonwebtoken');
 const app = express();
 const port = process.env.PORT || 5000;
-require('dotenv').config()
+require('dotenv').config();
 
 
 //middleware
 app.use(cors());
 app.use(express.json());
-
-
-
 
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.6x5bkid.mongodb.net/?retryWrites=true&w=majority`;
 
@@ -24,16 +22,53 @@ const client = new MongoClient(uri, {
     }
 });
 
+
+const verifyJWT = (req, res, next) => {
+    const authorization = req.headers.authorization;
+    console.log(authorization);
+    if (!authorization) {
+        return res.status(401).send({ error: true, message: "unauthorized access" })
+    }
+    const token = authorization.split(' ')[1];
+    jwt.verify(token, process.env.ACCESS_SECRET_TOKEN, (error, decoded) => {
+        if (error) {
+            return res.status(403).send({ error: true, message: "unauthorized access" })
+        }
+        req.decoded = decoded;
+        next();
+    })
+}
+
 async function run() {
     try {
-        // Connect the client to the server	(optional starting in v4.7)
+
         await client.connect();
 
         const serviceCOllection = client.db("carDoctor").collection('services');
         const bookingCollection = client.db('carDoctor').collection('bookings');
 
+        //jwt
+
+        app.post('/jwt', (req, res) => {
+            const user = req.body;
+            const token = jwt.sign(user, process.env.ACCESS_SECRET_TOKEN, {
+                expiresIn: '1h'
+            })
+            res.send({ token })
+        })
+
+        //services routes
         app.get('/services', async (req, res) => {
-            const result = await serviceCOllection.find().toArray();
+            const sort = req.query.sort
+            const search = req.query.search
+            console.log(search);
+            const query = { title: { $regex: search, options: 'i' } };
+            const options = {
+                sort: {
+                    "price": sort == 1 ? 1 : -1
+                }
+            }
+            const result = await serviceCOllection.find(query, options).toArray();
             res.send(result);
         })
 
@@ -52,9 +87,16 @@ async function run() {
             res.send(result);
         })
 
-        //bookings
+        //bookings routes
 
-        app.get('/bookings', async (req, res) => {
+        app.get('/bookings', verifyJWT, async (req, res) => {
+            const decoded = req.decoded;
+            console.log(decoded);
+
+            if (decoded.email !== req.query?.email) {
+                return res.send({ error: true, message: "Forbidden access" })
+            }
+
             let query = {};
             if (req.query?.email) {
                 query = { email: req.query.email }
@@ -77,6 +119,20 @@ async function run() {
             res.send(result);
         })
 
+
+        app.patch('/bookings/:id', async (req, res) => {
+            const updateBookings = req.body;
+            const id = req.params.id;
+            const query = { _id: new ObjectId(id) }
+            const updateDoc = {
+                $set: {
+                    status: updateBookings.status
+                },
+            };
+
+            const result = await bookingCollection.updateOne(query, updateDoc);
+            res.send(result);
+        })
 
 
 
